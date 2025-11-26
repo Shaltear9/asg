@@ -1,4 +1,3 @@
-
 import type { SunoTask } from "../types";
 
 const SUNO_API_URL = "https://api.sunoapi.org/api/v1";
@@ -11,36 +10,23 @@ interface GenerateResponse {
     };
 }
 
-// Flexible track data interface to handle API variations
-interface TrackData {
-    id?: string;
-    audio_url?: string;
-    audioUrl?: string;
-    image_url?: string;
-    imageUrl?: string;
-    title?: string;
-    tags?: string;
-    duration?: number;
-    prompt?: string;
-    [key: string]: any;
-}
-
-interface TaskInfoData {
-    taskId: string;
-    status: string; 
-    response?: {
-        data: TrackData[];
-        [key: string]: any;
-    };
-    data?: TrackData[]; // Fallback location
-    errorMessage?: string;
-    [key: string]: any;
-}
-
-interface TaskStatusResponse {
+// 根据轮询.txt文档修正接口
+interface WavRecordInfoResponse {
     code: number;
     msg: string;
-    data: TaskInfoData;
+    data: {
+        taskId: string;
+        musicId: string;
+        callbackUrl: string;
+        completeTime: string;
+        response: {
+            audioWavUrl: string;
+        };
+        successFlag: 'PENDING' | 'SUCCESS' | 'CREATE_TASK_FAILED' | 'GENERATE_WAV_FAILED' | 'CALLBACK_EXCEPTION';
+        createTime: string;
+        errorCode: number | null;
+        errorMessage: string | null;
+    };
 }
 
 /**
@@ -54,7 +40,7 @@ export async function generateMusic(prompt: string, apiKey: string, instrumental
     // The API requires callBackUrl even if we are polling.
     const body = {
         prompt: prompt,
-        customMode: false, 
+        customMode: false,
         instrumental: instrumental,
         model: "V5",
         callBackUrl: "https://webhook.site/8e599e44-1a3e-4630-bbbf-9dc75d9bd674"
@@ -95,8 +81,8 @@ export async function generateMusic(prompt: string, apiKey: string, instrumental
  * @param onProgress Optional callback to update status message in UI
  */
 export async function pollForMusic(
-    taskId: string, 
-    apiKey: string, 
+    taskId: string,
+    apiKey: string,
     onProgress?: (status: string) => void
 ): Promise<SunoTask[]> {
     const MAX_ATTEMPTS = 60; // 5 minutes
@@ -109,7 +95,8 @@ export async function pollForMusic(
         await new Promise(resolve => setTimeout(resolve, INTERVAL));
 
         try {
-            const response = await fetch(`${SUNO_API_URL}/generate/record-info?taskId=${taskId}`, {
+            // 修正轮询接口为 /api/v1/wav/record-info
+            const response = await fetch(`${SUNO_API_URL}/wav/record-info?taskId=${taskId}`, {
                 method: "GET",
                 headers: {
                     "Authorization": `Bearer ${apiKey}`,
@@ -122,11 +109,11 @@ export async function pollForMusic(
                 const errText = await response.text();
                 console.warn(`Polling HTTP Error (${response.status}):`, errText);
                 if (consecutiveErrors >= 5) throw new Error(`Repeated API errors (${response.status}): ${errText}`);
-                if (onProgress) onProgress(`Connection issue... retrying (${i+1}/${MAX_ATTEMPTS})`);
+                if (onProgress) onProgress(`Connection issue... retrying (${i + 1}/${MAX_ATTEMPTS})`);
                 continue;
             }
 
-            const res: TaskStatusResponse = await response.json();
+            const res: WavRecordInfoResponse = await response.json();
 
             if (res.code !== 200) {
                 consecutiveErrors++;
@@ -137,85 +124,46 @@ export async function pollForMusic(
 
             consecutiveErrors = 0;
             const data = res.data;
-            
+
             if (!data) {
-                 if (onProgress) onProgress(`Waiting for data... (${i+1}/${MAX_ATTEMPTS})`);
-                 continue;
+                if (onProgress) onProgress(`Waiting for data... (${i + 1}/${MAX_ATTEMPTS})`);
+                continue;
             }
 
-            const status = (data.status || 'UNKNOWN').toUpperCase();
+            const status = (data.successFlag || 'UNKNOWN').toUpperCase();
             lastKnownStatus = status;
 
             if (onProgress) {
-                onProgress(`Status: ${status} (${Math.round(((i + 1) * INTERVAL)/1000)}s)`);
+                onProgress(`Status: ${status} (${Math.round(((i + 1) * INTERVAL) / 1000)}s)`);
             }
 
-            // Flexible extraction of tracks
-            let tracks: TrackData[] = [];
-            
-            // Handle case where response might be a JSON string (rare but possible in some proxy configs)
-            let responseObj = data.response;
-            if (typeof responseObj === 'string') {
-                try {
-                     responseObj = JSON.parse(responseObj);
-                } catch (e) {
-                    console.warn("Failed to parse data.response string:", responseObj);
-                }
-            }
-
-            // Prioritize documented location (data.response.data)
-            if (responseObj?.data && Array.isArray(responseObj.data)) {
-                tracks = responseObj.data;
-            } else if (Array.isArray(responseObj)) {
-                tracks = responseObj as any;
-            } else if (Array.isArray(data.data)) {
-                // Fallback: sometimes APIs return data directly in data.data
-                tracks = data.data;
-            } else if (responseObj?.clips && Array.isArray(responseObj.clips)) {
-                 // Fallback: some versions use 'clips'
-                 tracks = responseObj.clips;
-            }
-
-            // Helpers for loose property matching (camelCase vs snake_case)
-            const getAudioUrl = (t: any) => t.audio_url || t.audioUrl || t.audio_src || t.url || t.audio;
-            const getImageUrl = (t: any) => t.image_url || t.imageUrl || t.image_src || t.image;
-
-            // If we have tracks, check if they have content
-            if (tracks.length > 0) {
-                const validTracks = tracks.filter(t => getAudioUrl(t));
-                
-                if (validTracks.length > 0) {
-                    console.log("Suno Generation Success:", validTracks);
-                    return validTracks.map(item => ({
-                        id: item.id || `gen-${Date.now()}-${Math.random()}`,
-                        status: 'SUCCESS',
-                        audio_url: getAudioUrl(item),
-                        image_url: getImageUrl(item),
-                        title: item.title || 'Generated Track',
-                        prompt: item.prompt || item.metadata?.prompt
-                    }));
-                }
-            }
-
+            // 检查任务状态
             if (status === 'SUCCESS') {
-                // Status says success, but we didn't find valid tracks in the previous block.
-                console.warn("Status SUCCESS but no valid audio found. Full Response:", JSON.stringify(res));
-                
-                if (tracks.length > 0) {
-                     throw new Error("Generation marked as complete, but audio URLs were missing from the response.");
+                // 成功状态，检查是否有音频URL
+                if (data.response?.audioWavUrl) {
+                    console.log("Suno Generation Success:", data);
+                    return [{
+                        id: data.taskId,
+                        status: 'SUCCESS',
+                        audio_url: data.response.audioWavUrl,
+                        title: 'Generated Track',
+                        prompt: prompt // 这里需要从外部传入prompt，或者可以从其他途径获取
+                    }];
                 } else {
-                     throw new Error("Generation marked as complete, but no track data was returned.");
+                    throw new Error("Generation marked as complete, but audio URL was missing from the response.");
                 }
             }
 
-            if (status === 'FAILED') {
+            if (status === 'CREATE_TASK_FAILED' || status === 'GENERATE_WAV_FAILED' || status === 'CALLBACK_EXCEPTION') {
                 throw new Error(`Suno API task failed: ${data.errorMessage || 'Unknown error'}`);
             }
+
+            // 对于PENDING状态，继续轮询
 
         } catch (e) {
             // Check if it's a fatal error we just threw
             if (e instanceof Error && (
-                e.message.includes("Repeated API") || 
+                e.message.includes("Repeated API") ||
                 e.message.includes("Suno API task failed") ||
                 e.message.includes("Generation marked as complete")
             )) {
@@ -225,5 +173,5 @@ export async function pollForMusic(
         }
     }
 
-    throw new Error(`Timeout waiting for music generation. Last known status: ${lastKnownStatus}. If the status was SUCCESS, it may indicate a data parsing issue.`);
+    throw new Error(`Timeout waiting for music generation. Last known status: ${lastKnownStatus}.`);
 }
