@@ -43,36 +43,40 @@ export const SunoGenerationPanel: React.FC<SunoGenerationPanelProps> = ({ initia
     }
 
     if (!initialPrompt) return null;
-
     const handleGenerate = async () => {
         if (!apiKey) {
-            setError("Please enter a Suno API Key.");
+            setError("请输入Suno API Key。");
             return;
         }
         setError(null);
         setIsGenerating(true);
         setGeneratedTasks([]);
-        setStatusMessage("Submitting to Suno AI...");
+        setStatusMessage("提交生成任务...");
 
         try {
-            // 1. Submit Task
-            const taskId = await generateMusic(prompt, apiKey, instrumental);
-            setStatusMessage("Task submitted. Waiting for Suno...");
-            
-            // 2. Poll with progress callback
-            const results = await pollForMusic(taskId, apiKey, (msg) => {
-                setStatusMessage(msg);
-            });
+            // 1. 提交生成任务
+            const taskId = await generateMusic(
+                prompt,
+                apiKey,
+                instrumental,
+                title || "AI Soundtrack",
+                "Cinematic"
+            );
 
-            if (results.length === 0) {
-                throw new Error("Generation finished but no audio tracks were returned.");
-            }
+            setStatusMessage("任务已提交，等待生成...");
+
+            // 2. 轮询结果
+            const results = await pollForMusic(taskId, apiKey, (msg, progress) => {
+                setStatusMessage(msg);
+                // 可以在这里添加进度条显示
+            });
 
             setGeneratedTasks(results);
             setStatusMessage("");
+
         } catch (e: any) {
-            console.error("Generation error:", e);
-            setError(e.message || "Failed to generate music. Please check console for details.");
+            console.error("生成错误:", e);
+            setError(e.message || "生成音乐失败，请检查控制台获取详细信息。");
         } finally {
             setIsGenerating(false);
         }
