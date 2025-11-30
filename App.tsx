@@ -1,4 +1,4 @@
-
+ï»¿
 import React, { useState, useCallback } from 'react';
 import { analyzeScriptAndGeneratePrompts } from './services/geminiService';
 import type { ScriptAnalysis } from './types';
@@ -10,14 +10,14 @@ import { upload } from '@vercel/blob/client';
 import type { PutBlobResult } from '@vercel/blob';
 
 const App: React.FC = () => {
-    const MAX_VIDEO_SIZE_MB = 20; // ÄãÏëÒªµÄ×î´óÌå»ı£¬±ÈÈç 20MB
+    const MAX_VIDEO_SIZE_MB = 20; // ä½ æƒ³è¦çš„æœ€å¤§ä½“ç§¯ï¼Œæ¯”å¦‚ 20MB
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [scriptText, setScriptText] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [videoFile, setVideoFile] = useState<File | null>(null);
-    const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null); // ÓÃÓÚ <video> ²¥·Å
-    const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);       // Vercel Blob ·µ»ØµÄ url
+    const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null); // ç”¨äº <video> æ’­æ”¾
+    const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);       // Vercel Blob è¿”å›çš„ url
     const [isUploadingVideo, setIsUploadingVideo] = useState(false);
 
     
@@ -25,38 +25,39 @@ const App: React.FC = () => {
     const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
 
     const handleVideoUpload = async (file: File) => {
-        // 1) ÏÈÅĞ¶Ï´óĞ¡£¨µ¥Î»£ºMB£©
+        // 1) å…ˆåˆ¤æ–­å¤§å°...
         const sizeMb = file.size / (1024 * 1024);
         if (sizeMb > MAX_VIDEO_SIZE_MB) {
             setError(
-                `ÊÓÆµÌ«´óÁË£¨Ô¼ ${sizeMb.toFixed(
+                `è§†é¢‘å¤ªå¤§äº†ï¼ˆçº¦ ${sizeMb.toFixed(
                     1
-                )} MB£©¡£µ±Ç°×î´óÖ§³Ö ${MAX_VIDEO_SIZE_MB} MB£¬ÇëÏÈÑ¹Ëõ»ò²Ã¼ôºóÔÙÉÏ´«¡£`
+                )} MBï¼‰ã€‚å½“å‰æœ€å¤§æ”¯æŒ ${MAX_VIDEO_SIZE_MB} MBï¼Œè¯·å…ˆå‹ç¼©æˆ–è£å‰ªåå†ä¸Šä¼ ã€‚`
             );
             return;
         }
 
-        // 2) ÇåÀí¾É×´Ì¬ & ½øÈë¡°ÉÏ´«ÖĞ¡±
         setError(null);
         setIsUploadingVideo(true);
 
         try {
-            // 3) ÉÏ´«µ½ Vercel Blob£¨ÕæÕıµÄ´óÎÄ¼şÖ»ÔÚÕâÀï×ß£©
             const blob: PutBlobResult = await upload(file.name, file, {
                 access: 'public',
                 handleUploadUrl: '/api/blob-upload',
-                multipart: true, // ´óÎÄ¼ş½¨Òé´ò¿ª·ÖÆ¬ÉÏ´«
+                multipart: true,
                 contentType: file.type || 'video/mp4',
             });
 
-            // 4) ÓÃ Blob URL ×öÔ¤ÀÀ / ºóĞø·ÖÎö
-            setVideoUrl(blob.url); // ÄãºóÃæ·ÖÎöÈç¹ûÓÃµÄÊÇ videoUrl£¬ÕâÀïÖ±½ÓÓÃËü
+            // â˜… å…³é”®ï¼šä¸‰å¤„éƒ½åŒæ­¥èµ·æ¥
+            setVideoUrl(blob.url);          // ä½ åŸæ¥å°±æœ‰çš„
+            setVideoPreviewUrl(blob.url);   // ç”¨äº <video> æ’­æ”¾
+            setVideoBlobUrl(blob.url);      // ç”¨äºç”Ÿæˆæç¤ºè¯æ—¶ä¼ ç»™åç«¯
         } catch (err) {
             console.error('[handleVideoUpload] upload error:', err);
-            setError('ÊÓÆµÉÏ´«µ½ Blob Ê§°Ü£¬ÇëÉÔºóÖØÊÔ¡£');
+            setError('è§†é¢‘ä¸Šä¼ åˆ° Blob å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•ã€‚');
             setVideoUrl(null);
+            setVideoPreviewUrl(null);
+            setVideoBlobUrl(null);
         } finally {
-            // 5) ÎŞÂÛ³É¹¦Ê§°Ü£¬¶¼½áÊø¡°ÉÏ´«ÖĞ¡±
             setIsUploadingVideo(false);
         }
     };
@@ -72,14 +73,14 @@ const App: React.FC = () => {
 
     const handleAnalyzeScript = useCallback(async () => {
         if (!scriptText.trim() && !videoBlobUrl) {
-            setError('ÇëÖÁÉÙÉÏ´«Ò»¸öÊÓÆµ£¬»òÊäÈëÒ»¶Î¾ç±¾/ÃèÊö¡£');
+            setError('è¯·è‡³å°‘ä¸Šä¼ ä¸€ä¸ªè§†é¢‘ï¼Œæˆ–è¾“å…¥ä¸€æ®µå‰§æœ¬/æè¿°ã€‚');
             return;
         }
 
         if (!videoBlobUrl) {
-            // ÎªÁË±ÜÃâÄãÍüÁËµÈÉÏ´«Íê¾Íµã Analyze
-            // Ã»ÓĞ blobUrl ËµÃ÷ÊÓÆµ»¹Ã»³É¹¦ÉÏ´«
-            setError('ÊÓÆµÉĞÎ´ÉÏ´«Íê³É£¬ÇëÉÔºòÔÙÊÔ¡£');
+            // ä¸ºäº†é¿å…ä½ å¿˜äº†ç­‰ä¸Šä¼ å®Œå°±ç‚¹ Analyze
+            // æ²¡æœ‰ blobUrl è¯´æ˜è§†é¢‘è¿˜æ²¡æˆåŠŸä¸Šä¼ 
+            setError('è§†é¢‘å°šæœªä¸Šä¼ å®Œæˆï¼Œè¯·ç¨å€™å†è¯•ã€‚');
             return;
         }
 
@@ -123,7 +124,7 @@ const App: React.FC = () => {
                         <div>
                             <h2 className="text-xl font-semibold mb-3 text-cyan-400">1. Upload Assets</h2>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <FileUpload onFileUpload={handleVideoUpload} accept="video/*" label={isUploadingVideo ? 'Uploading video¡­' : 'Upload Video'} />
+                                <FileUpload onFileUpload={handleVideoUpload} accept="video/*" label={isUploadingVideo ? 'Uploading videoâ€¦' : 'Upload Video'} />
                                 <FileUpload onFileUpload={handleScriptUpload} accept=".txt" label="Upload Script (.txt)" />
                             </div>
                         </div>
@@ -131,7 +132,7 @@ const App: React.FC = () => {
                         {isUploadingVideo && (
                             <p className="mt-1 text-xs text-gray-400 flex items-center gap-1">
                                 <SpinnerIcon className="h-4 w-4 animate-spin" />
-                                ÕıÔÚÉÏ´«ÊÓÆµ£¬ÇëÉÔºò¡­
+                                æ­£åœ¨ä¸Šä¼ è§†é¢‘ï¼Œè¯·ç¨å€™â€¦
                             </p>
                         )}
 
@@ -157,9 +158,9 @@ const App: React.FC = () => {
                             <button
                                 onClick={handleAnalyzeScript}
                                 disabled={
-                                    isUploadingVideo ||               // ÕıÔÚÉÏ´«Ê±½ûÓÃ
-                                    isLoading ||                      // ÕıÔÚ·ÖÎöÊ±½ûÓÃ
-                                    (!scriptText.trim() && !videoUrl) // Ã»½Å±¾Ò²Ã»ÊÓÆµÊ±½ûÓÃ
+                                    isUploadingVideo ||
+                                    isLoading ||
+                                    (!scriptText.trim() && !videoBlobUrl) // ç”¨ videoBlobUrl å’Œä¸Šé¢ä¿æŒä¸€è‡´
                                 }
                                 className="w-full flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] disabled:scale-100 shadow-lg shadow-cyan-900/30"
                             >
