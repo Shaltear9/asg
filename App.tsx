@@ -10,6 +10,7 @@ import { upload } from '@vercel/blob/client';
 import type { PutBlobResult } from '@vercel/blob';
 
 const App: React.FC = () => {
+    const MAX_VIDEO_SIZE_MB = 20; // 你想要的最大体积，比如 20MB
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [scriptText, setScriptText] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -24,28 +25,38 @@ const App: React.FC = () => {
     const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
 
     const handleVideoUpload = async (file: File) => {
+        // 1) 先判断大小（单位：MB）
+        const sizeMb = file.size / (1024 * 1024);
+        if (sizeMb > MAX_VIDEO_SIZE_MB) {
+            setError(
+                `视频太大了（约 ${sizeMb.toFixed(
+                    1
+                )} MB）。当前最大支持 ${MAX_VIDEO_SIZE_MB} MB，请先压缩或裁剪后再上传。`
+            );
+            return;
+        }
+
+        // 2) 清理旧状态 & 进入“上传中”
         setError(null);
         setIsUploadingVideo(true);
-        setVideoBlobUrl(null);
 
         try {
-            // 直接走 Vercel Blob 的 client upload
+            // 3) 上传到 Vercel Blob（真正的大文件只在这里走）
             const blob: PutBlobResult = await upload(file.name, file, {
                 access: 'public',
-                handleUploadUrl: '/api/blob-upload', // 就是上面新建的那个 API
-                multipart: true, // 可选：限制 Content-Type，这里和后端 allowedContentTypes 保持一致
+                handleUploadUrl: '/api/blob-upload',
+                multipart: true, // 大文件建议打开分片上传
                 contentType: file.type || 'video/mp4',
             });
 
-            // Blob 返回的 url，是一个真正可访问的视频地址
-            setVideoBlobUrl(blob.url);
-            setVideoPreviewUrl(blob.url); // 直接用 blob url 播放也行
+            // 4) 用 Blob URL 做预览 / 后续分析
+            setVideoUrl(blob.url); // 你后面分析如果用的是 videoUrl，这里直接用它
         } catch (err) {
-            console.error(err);
+            console.error('[handleVideoUpload] upload error:', err);
             setError('视频上传到 Blob 失败，请稍后重试。');
-            setVideoBlobUrl(null);
-            setVideoPreviewUrl(null);
+            setVideoUrl(null);
         } finally {
+            // 5) 无论成功失败，都结束“上传中”
             setIsUploadingVideo(false);
         }
     };
@@ -112,10 +123,17 @@ const App: React.FC = () => {
                         <div>
                             <h2 className="text-xl font-semibold mb-3 text-cyan-400">1. Upload Assets</h2>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <FileUpload onFileUpload={handleVideoUpload} accept="video/*" label="Upload Video" />
+                                <FileUpload onFileUpload={handleVideoUpload} accept="video/*" label={isUploadingVideo ? 'Uploading video…' : 'Upload Video'} />
                                 <FileUpload onFileUpload={handleScriptUpload} accept=".txt" label="Upload Script (.txt)" />
                             </div>
                         </div>
+
+                        {isUploadingVideo && (
+                            <p className="mt-1 text-xs text-gray-400 flex items-center gap-1">
+                                <SpinnerIcon className="h-4 w-4 animate-spin" />
+                                正在上传视频，请稍候…
+                            </p>
+                        )}
 
                         {videoPreviewUrl && (
                             <video
@@ -138,7 +156,11 @@ const App: React.FC = () => {
                         <div className="mt-auto">
                             <button
                                 onClick={handleAnalyzeScript}
-                                disabled={(!scriptText.trim() && !videoFile) || isLoading}
+                                disabled={
+                                    isUploadingVideo ||               // 正在上传时禁用
+                                    isLoading ||                      // 正在分析时禁用
+                                    (!scriptText.trim() && !videoUrl) // 没脚本也没视频时禁用
+                                }
                                 className="w-full flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] disabled:scale-100 shadow-lg shadow-cyan-900/30"
                             >
                                 {isLoading ? (
