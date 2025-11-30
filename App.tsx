@@ -6,6 +6,8 @@ import { FileUpload } from './components/FileUpload';
 import { SpinnerIcon } from './components/icons/SpinnerIcon';
 import { MusicIcon } from './components/icons/MusicIcon';
 import { SunoGenerationPanel } from './components/SunoGenerationPanel';
+import { upload } from '@vercel/blob/client';
+import type { PutBlobResult } from '@vercel/blob';
 
 const App: React.FC = () => {
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -13,17 +15,39 @@ const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [videoFile, setVideoFile] = useState<File | null>(null);
+    const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null); // 用于 <video> 播放
+    const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);       // Vercel Blob 返回的 url
+    const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+
     
     // Analysis State
     const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
 
-    const handleVideoUpload = (file: File) => {
-        // 保存 File，用于后面传给 Gemini 做多模态
-        setVideoFile(file);
+    const handleVideoUpload = async (file: File) => {
+        setError(null);
+        setIsUploadingVideo(true);
+        setVideoBlobUrl(null);
 
-        // 用 Blob URL 做预览
-        const url = URL.createObjectURL(file);
-        setVideoUrl(url);
+        try {
+            // 直接走 Vercel Blob 的 client upload
+            const blob: PutBlobResult = await upload(file.name, file, {
+                access: 'public',
+                handleUploadUrl: '/api/blob-upload', // 就是上面新建的那个 API
+                // 可选：限制 Content-Type，这里和后端 allowedContentTypes 保持一致
+                contentType: file.type || 'video/mp4',
+            });
+
+            // Blob 返回的 url，是一个真正可访问的视频地址
+            setVideoBlobUrl(blob.url);
+            setVideoPreviewUrl(blob.url); // 直接用 blob url 播放也行
+        } catch (err) {
+            console.error(err);
+            setError('视频上传到 Blob 失败，请稍后重试。');
+            setVideoBlobUrl(null);
+            setVideoPreviewUrl(null);
+        } finally {
+            setIsUploadingVideo(false);
+        }
     };
 
     const handleScriptUpload = (file: File) => {
@@ -36,8 +60,15 @@ const App: React.FC = () => {
     };
 
     const handleAnalyzeScript = useCallback(async () => {
-        if (!scriptText.trim() && !videoFile) {
-            setError('请至少上传一个视频，或输入/上传一段剧本描述。');
+        if (!scriptText.trim() && !videoBlobUrl) {
+            setError('请至少上传一个视频，或输入一段剧本/描述。');
+            return;
+        }
+
+        if (!videoBlobUrl) {
+            // 为了避免你忘了等上传完就点 Analyze
+            // 没有 blobUrl 说明视频还没成功上传
+            setError('视频尚未上传完成，请稍候再试。');
             return;
         }
 
@@ -48,7 +79,7 @@ const App: React.FC = () => {
         try {
             const result = await analyzeScriptAndGeneratePrompts(
                 scriptText,
-                videoFile ?? undefined
+                videoBlobUrl
             );
             setAnalysis(result);
         } catch (err) {
@@ -61,7 +92,7 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [scriptText, videoFile]);
+    }, [scriptText, videoBlobUrl]);
 
     return (
         <div className="min-h-screen bg-gray-900 text-gray-200 font-sans">
@@ -86,11 +117,12 @@ const App: React.FC = () => {
                             </div>
                         </div>
 
-                        {videoUrl && (
-                            <div>
-                                <h3 className="font-semibold mb-2">Video Preview</h3>
-                                <video controls src={videoUrl} className="w-full rounded-lg bg-black border border-gray-700"></video>
-                            </div>
+                        {videoPreviewUrl && (
+                            <video
+                                src={videoPreviewUrl}
+                                controls
+                                className="w-full rounded-lg mt-2"
+                            />
                         )}
                         
                         <div>

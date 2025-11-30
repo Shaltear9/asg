@@ -1,9 +1,15 @@
 // api/gemini-analyze.ts
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const GEMINI_ENDPOINT =
     'https://yunwu.ai/v1beta/models/gemini-2.0-flash:generateContent';
 
-export default async function handler(req: any, res: any) {
+function bufferToBase64(buf: ArrayBuffer): string {
+    // Vercel Node 运行时里可以用 Buffer 来转
+    return Buffer.from(buf).toString('base64');
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') {
         res.setHeader('Allow', 'POST');
         return res.status(405).json({ error: 'Method not allowed' });
@@ -15,23 +21,23 @@ export default async function handler(req: any, res: any) {
     }
 
     try {
-        // Vercel Node 函数中，req.body 可能是对象，也可能是字符串
+        // 读 body（Vercel Node 默认已帮你 parse JSON，如果没 parse 就按字符串再转一次）
         let bodyData: any = req.body;
         if (typeof bodyData === 'string') {
             try {
                 bodyData = JSON.parse(bodyData);
-            } catch (e) {
+            } catch {
                 return res.status(400).json({ error: 'Invalid JSON body' });
             }
         }
         bodyData = bodyData || {};
 
-        const { scriptText, video } = bodyData as {
+        const { scriptText, videoUrl } = bodyData as {
             scriptText?: string;
-            video?: { mimeType: string; data: string } | null;
+            videoUrl?: string | null;
         };
 
-        if (!scriptText?.trim() && !video) {
+        if (!scriptText?.trim() && !videoUrl) {
             return res
                 .status(400)
                 .json({ error: '请至少提供视频或剧本/描述之一。' });
@@ -39,17 +45,30 @@ export default async function handler(req: any, res: any) {
 
         const parts: any[] = [];
 
-        // 1) 视频 part：用你 txt 文档里的字段：inline_data + mime_type
-        if (video) {
+        // 1) 如果有视频 URL：先从 Blob 拉下来，再转 base64，塞进 inline_data
+        if (videoUrl) {
+            const videoResp = await fetch(videoUrl);
+            if (!videoResp.ok) {
+                const t = await videoResp.text().catch(() => '');
+                return res.status(502).json({
+                    error: '下载视频失败（Blob URL 不可访问或已过期）。',
+                    status: videoResp.status,
+                    body: t,
+                });
+            }
+
+            const arrayBuf = await videoResp.arrayBuffer();
+            const base64Video = bufferToBase64(arrayBuf);
+
             parts.push({
                 inline_data: {
-                    mime_type: video.mimeType || 'video/mp4',
-                    data: video.data,
+                    mime_type: 'video/mp4', // 或根据需要改成实际类型
+                    data: base64Video,
                 },
             });
         }
 
-        // 2) 文本 part（系统提示 + 用户剧本）
+        // 2) 文本提示
         const scriptSegment = (scriptText || '').trim();
 
         const textPrompt = `
@@ -95,7 +114,6 @@ ${scriptSegment
         const upstreamText = await upstreamRes.text();
 
         if (!upstreamRes.ok) {
-            // 把上游错误透传回前端，方便排查
             return res.status(upstreamRes.status).json({
                 error: 'Gemini upstream error',
                 status: upstreamRes.status,
@@ -103,13 +121,12 @@ ${scriptSegment
             });
         }
 
-        // yunwu 代理基本跟官方一致：candidates[0].content.parts[0].text
+        // yunwu 代理的结构基本跟官方一致：candidates[0].content.parts[0].text
         let text: string | null = null;
         try {
             const data = JSON.parse(upstreamText);
             text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
         } catch {
-            // 防御：万一上游直接返回纯文本
             text = upstreamText;
         }
 
@@ -119,7 +136,7 @@ ${scriptSegment
                 .json({ error: 'Gemini 返回的结果中没有文本内容。' });
         }
 
-        // 让模型返回 JSON 字符串，我们在后端解析
+        // 期望模型返回 JSON 字符串，保险起见只截取最外层大括号间的内容
         const firstBrace = text.indexOf('{');
         const lastBrace = text.lastIndexOf('}');
         const jsonSlice =
@@ -137,7 +154,6 @@ ${scriptSegment
             });
         }
 
-        // 直接把解析好的 JSON 返回给前端
         return res.status(200).json(parsed);
     } catch (err: any) {
         console.error('[api/gemini-analyze] error:', err);
