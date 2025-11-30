@@ -37,7 +37,7 @@ const App: React.FC = () => {
 
     const handleAnalyzeScript = useCallback(async () => {
         if (!scriptText.trim() && !videoFile) {
-            setError('Please upload a video and/or provide a script or description to analyze.');
+            setError('请至少上传一个视频，或输入/上传一段剧本描述。');
             return;
         }
 
@@ -106,7 +106,7 @@ const App: React.FC = () => {
                         <div className="mt-auto">
                             <button
                                 onClick={handleAnalyzeScript}
-                                disabled={(!scriptText && !videoFile) || isLoading}
+                                disabled={(!scriptText.trim() && !videoFile) || isLoading}
                                 className="w-full flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] disabled:scale-100 shadow-lg shadow-cyan-900/30"
                             >
                                 {isLoading ? (
