@@ -1,5 +1,4 @@
-﻿
-import React, { useState, useCallback } from 'react';
+﻿import React, { useState, useCallback } from 'react';
 import { analyzeScriptAndGeneratePrompts } from './services/geminiService';
 import type { ScriptAnalysis } from './types';
 import { FileUpload } from './components/FileUpload';
@@ -8,46 +7,72 @@ import { MusicIcon } from './components/icons/MusicIcon';
 import { SunoGenerationPanel } from './components/SunoGenerationPanel';
 
 const App: React.FC = () => {
+    // ---------- Upload & input state ----------
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
-    const [videoFile, setVideoFile] = useState<File | null>(null); //新增
+    const [videoFile, setVideoFile] = useState<File | null>(null); // ⭐ 保存视频文件本体
     const [scriptText, setScriptText] = useState<string>('');
+
+    // ---------- Analysis state ----------
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
 
+    // ---------- Handlers ----------
+
+    // 上传视频：同时保存预览 URL 和 File 本体（给 Gemini 多模态用）
     const handleVideoUpload = (file: File) => {
         const url = URL.createObjectURL(file);
         setVideoUrl(url);
-        setVideoFile(file); //保存文件本体
+        setVideoFile(file);
     };
 
+    // 上传脚本文件：读取文本内容
     const handleScriptUpload = (file: File) => {
         const reader = new FileReader();
-        reader.onload = (e) => {
-            const text = e.target?.result as string;
-            setScriptText(text);
+        reader.onload = (event) => {
+            const text = event.target?.result as string;
+            setScriptText(text || '');
         };
         reader.readAsText(file);
     };
 
+    // 点击分析：脚本文本 +（可选）视频文件，多模态分析
     const handleAnalyzeScript = useCallback(async () => {
-        //允许「只视频」「只脚本」「视频 + 脚本」
-        if (!scriptText && !videoFile) {
+        // 至少要有一个输入：脚本 或 视频
+        if (!scriptText.trim() && !videoFile) {
             setError('Please upload a video or provide a script/description.');
             return;
         }
+
         setIsLoading(true);
         setError(null);
         setAnalysis(null);
 
+        const TIMEOUT_MS = 120000; // 120 秒超时，防止一直卡住
+
+        const analysisPromise = analyzeScriptAndGeneratePrompts(
+            scriptText,
+            videoFile || undefined
+        );
+
+        const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Gemini analysis timeout')), TIMEOUT_MS)
+        );
+
         try {
-            const result = await analyzeScriptAndGeneratePrompts(
-                scriptText,
-                videoFile || undefined   //传入视频文件
-            );
+            console.log('[Gemini] start multimodal analysis', {
+                hasScript: !!scriptText.trim(),
+                hasVideo: !!videoFile,
+            });
+
+            const result = (await Promise.race([
+                analysisPromise,
+                timeoutPromise,
+            ])) as ScriptAnalysis;
+
             setAnalysis(result);
         } catch (err) {
-            console.error(err);
+            console.error('[Gemini] error', err);
             if (err instanceof Error) {
                 setError(`An error occurred: ${err.message}`);
             } else {
@@ -58,104 +83,207 @@ const App: React.FC = () => {
         }
     }, [scriptText, videoFile]);
 
+    // ---------- Render ----------
+
     return (
-        <div className="min-h-screen bg-gray-900 text-gray-200 font-sans">
-            <header className="bg-gray-800/50 backdrop-blur-sm p-4 border-b border-gray-700 fixed top-0 left-0 right-0 z-10">
-                <div className="container mx-auto flex items-center justify-between">
+        <div className="min-h-screen bg-gradient-to-br from-gray-950 via-slate-950 to-black text-gray-100">
+            {/* 顶部标题栏 */}
+            <header className="border-b border-gray-800 bg-black/40 backdrop-blur-md">
+                <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <MusicIcon className="h-8 w-8 text-cyan-400" />
-                        <h1 className="text-2xl font-bold tracking-tight text-white">AI Soundtrack Generator</h1>
+                        <div className="h-9 w-9 rounded-xl bg-cyan-500/10 border border-cyan-500/40 flex items-center justify-center">
+                            <MusicIcon className="h-5 w-5 text-cyan-400" />
+                        </div>
+                        <div>
+                            <h1 className="text-xl font-semibold tracking-tight">
+                                AI Soundtrack Generator
+                            </h1>
+                            <p className="text-xs text-gray-400">
+                                Upload video + script → AI analyzes → One-click Suno music
+                            </p>
+                        </div>
                     </div>
+                    <span className="text-xs text-gray-500">
+                        Gemini (multimodal) → Suno
+                    </span>
                 </div>
             </header>
 
-            <main className="container mx-auto p-4 pt-24">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Left Column: Inputs */}
-                    <div className="flex flex-col gap-6 p-6 bg-gray-800 rounded-xl border border-gray-700">
-                        <div>
-                            <h2 className="text-xl font-semibold mb-3 text-cyan-400">1. Upload Assets</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <FileUpload onFileUpload={handleVideoUpload} accept="video/*" label="Upload Video" />
-                                <FileUpload onFileUpload={handleScriptUpload} accept=".txt" label="Upload Script (.txt)" />
-                            </div>
-                        </div>
+            <main className="max-w-6xl mx-auto px-4 py-6">
+                <div className="grid gap-6 lg:grid-cols-2">
+                    {/* 左侧：上传 + 文本输入 */}
+                    <div className="space-y-6">
+                        {/* 上传区 */}
+                        <section className="bg-black/40 border border-gray-800 rounded-2xl p-5 shadow-xl shadow-black/40">
+                            <h2 className="text-lg font-semibold mb-1 text-cyan-400">
+                                1. Upload Assets
+                            </h2>
+                            <p className="text-xs text-gray-400 mb-4">
+                                Upload your video and (optionally) a script/description. The
+                                analysis will use <span className="font-semibold">both</span> if
+                                available.
+                            </p>
 
-                        {videoUrl && (
-                            <div>
-                                <h3 className="font-semibold mb-2">Video Preview</h3>
-                                <video controls src={videoUrl} className="w-full rounded-lg bg-black border border-gray-700"></video>
+                            <div className="grid sm:grid-cols-2 gap-4">
+                                <FileUpload
+                                    onFileUpload={handleVideoUpload}
+                                    accept="video/*"
+                                    label="Upload Video"
+                                />
+                                <FileUpload
+                                    onFileUpload={handleScriptUpload}
+                                    accept=".txt"
+                                    label="Upload Script (.txt)"
+                                />
                             </div>
-                        )}
-                        
-                        <div>
-                            <h2 className="text-xl font-semibold mb-3 text-cyan-400">2. Script / Description</h2>
+
+                            {videoUrl && (
+                                <div className="mt-5">
+                                    <h3 className="font-semibold mb-2 text-sm text-gray-200">
+                                        Video Preview
+                                    </h3>
+                                    <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black">
+                                        <video
+                                            controls
+                                            src={videoUrl}
+                                            className="w-full h-auto max-h-[320px] bg-black"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </section>
+
+                        {/* 文本脚本输入 */}
+                        <section className="bg-black/40 border border-gray-800 rounded-2xl p-5 shadow-xl shadow-black/40">
+                            <h2 className="text-lg font-semibold mb-2 text-cyan-400">
+                                2. Script / Description
+                            </h2>
+                            <p className="text-xs text-gray-400 mb-3">
+                                You can paste or edit the script here. If left empty, the AI will
+                                infer as much as it can from the video alone.
+                            </p>
+
                             <textarea
                                 value={scriptText}
                                 onChange={(e) => setScriptText(e.target.value)}
-                                placeholder="Paste your video script or a detailed description here..."
-                                className="w-full h-48 p-3 bg-gray-900 border border-gray-600 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-colors resize-none"
+                                placeholder="Paste your script or describe the video story, characters, emotions..."
+                                className="w-full min-h-[180px] rounded-xl bg-black/50 border border-gray-800 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/30 outline-none text-sm p-3 resize-vertical placeholder:text-gray-500"
                             />
-                        </div>
-                        
-                        <div className="mt-auto">
-                            <button
-                                onClick={handleAnalyzeScript}
-                                disabled={!scriptText || isLoading}
-                                className="w-full flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] disabled:scale-100 shadow-lg shadow-cyan-900/30"
-                            >
-                                {isLoading ? (
-                                    <>
-                                        <SpinnerIcon className="h-5 w-5 animate-spin" />
-                                        Analyzing Content...
-                                    </>
-                                ) : (
-                                    'Analyze & Generate Prompt'
-                                )}
-                            </button>
-                            {error && <p className="text-red-400 mt-3 text-center text-sm bg-red-900/20 p-2 rounded border border-red-900/50">{error}</p>}
-                        </div>
+
+                            <div className="mt-3 flex items-center justify-between">
+                                <span className="text-[11px] text-gray-500">
+                                    Tip: more detail → better matching soundtrack.
+                                </span>
+                                <span className="text-[11px] text-gray-500">
+                                    {scriptText.length} chars
+                                </span>
+                            </div>
+                        </section>
                     </div>
 
-                    {/* Right Column: Results */}
-                    <div className="flex flex-col gap-6">
-                        <h2 className="text-xl font-semibold text-cyan-400">3. Music Generation</h2>
-                        
-                        {!isLoading && !analysis && (
-                            <div className="flex flex-col items-center justify-center h-full bg-gray-800 rounded-xl border border-gray-700 border-dashed p-12 text-gray-500 text-center">
-                                <MusicIcon className="h-16 w-16 mb-4 opacity-50" />
-                                <p className="text-lg font-medium">Waiting for analysis...</p>
-                                <p className="text-sm mt-2">Upload a script and click Analyze to begin.</p>
+                    {/* 右侧：分析 + Suno 生成面板 */}
+                    <div className="space-y-6">
+                        {/* 分析结果 & 按钮 */}
+                        <section className="bg-black/40 border border-gray-800 rounded-2xl p-5 shadow-xl shadow-black/40">
+                            <div className="flex items-center justify-between mb-4">
+                                <div>
+                                    <h2 className="text-lg font-semibold text-cyan-400">
+                                        3. Analyze & Generate Prompt
+                                    </h2>
+                                    <p className="text-xs text-gray-400">
+                                        Gemini will analyze your video + script and create a
+                                        soundtrack prompt for Suno.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={handleAnalyzeScript}
+                                    disabled={isLoading}
+                                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition 
+                                        ${isLoading
+                                            ? 'bg-gray-700 text-gray-300 cursor-not-allowed'
+                                            : 'bg-cyan-500/90 hover:bg-cyan-400 text-black shadow-lg shadow-cyan-500/40'
+                                        }`}
+                                >
+                                    {isLoading ? (
+                                        <>
+                                            <SpinnerIcon className="h-4 w-4 animate-spin" />
+                                            Analyzing...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <MusicIcon className="h-4 w-4" />
+                                            Analyze for Soundtrack
+                                        </>
+                                    )}
+                                </button>
                             </div>
-                        )}
 
-                        {(isLoading || analysis) && (
-                             <SunoGenerationPanel 
-                                initialPrompt={analysis?.music_prompt || ''}
-                                title={analysis?.title || ''}
-                                isAnalyzing={isLoading}
-                            />
-                        )}
-                        
-                        {analysis && !isLoading && (
-                            <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-                                <h3 className="text-lg font-semibold text-white mb-3">Analysis Summary</h3>
-                                <div className="space-y-3">
-                                    <div className="flex justify-between border-b border-gray-700 pb-2">
-                                        <span className="text-gray-400">Title Suggestion</span>
-                                        <span className="text-cyan-300 font-medium">{analysis.title}</span>
+                            {error && (
+                                <div className="mb-4 text-sm rounded-xl border border-red-800/60 bg-red-950/40 px-3 py-2 text-red-200">
+                                    {error}
+                                </div>
+                            )}
+
+                            {analysis ? (
+                                <div className="space-y-4">
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                        <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-3">
+                                            <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                                                Title
+                                            </div>
+                                            <div className="text-sm font-semibold text-gray-100">
+                                                {analysis.title || 'Untitled soundtrack'}
+                                            </div>
+                                        </div>
+                                        <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-3">
+                                            <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                                                Mood
+                                            </div>
+                                            <div className="text-sm text-gray-100">
+                                                {analysis.mood}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between border-b border-gray-700 pb-2">
-                                        <span className="text-gray-400">Mood</span>
-                                        <span className="text-cyan-300 font-medium">{analysis.mood}</span>
+
+                                    <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-3">
+                                        <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                                            Story Summary
+                                        </div>
+                                        <p className="text-sm text-gray-200 leading-relaxed">
+                                            {analysis.summary}
+                                        </p>
                                     </div>
-                                    <div>
-                                        <span className="text-gray-400 block mb-1">Summary</span>
-                                        <p className="text-gray-300 text-sm leading-relaxed">{analysis.summary}</p>
+
+                                    <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-3">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <div className="text-[11px] uppercase tracking-wide text-gray-500">
+                                                Music Prompt for Suno
+                                            </div>
+                                            <span className="text-[10px] text-gray-500">
+                                                {analysis.music_prompt.length} chars
+                                            </span>
+                                        </div>
+                                        <p className="text-sm text-cyan-100 leading-relaxed">
+                                            {analysis.music_prompt}
+                                        </p>
                                     </div>
                                 </div>
-                            </div>
-                        )}
+                            ) : (
+                                <div className="mt-4 text-xs text-gray-500">
+                                    Run an analysis to see a suggested title, mood, summary and a
+                                    ready-to-use Suno music prompt here.
+                                </div>
+                            )}
+                        </section>
+
+                        {/* Suno 生成面板：用分析结果里的 music_prompt + title */}
+                        <section className="bg-black/40 border border-gray-800 rounded-2xl p-5 shadow-xl shadow-black/40">
+                            <SunoGenerationPanel
+                                initialPrompt={analysis?.music_prompt || ''}
+                                title={analysis?.title || 'AI Generated Soundtrack'}
+                                isAnalyzing={isLoading}
+                            />
+                        </section>
                     </div>
                 </div>
             </main>

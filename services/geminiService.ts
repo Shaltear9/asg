@@ -1,155 +1,148 @@
-// services/geminiService.ts
+ï»¿import { GoogleGenAI, Type } from "@google/genai";
 import type { ScriptAnalysis } from '../types';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
+//å•ä¾‹å®¢æˆ·ç«¯ï¼Œå¤ç”¨è¿æ¥
+let ai: GoogleGenAI | null = null;
 
-if (!GEMINI_API_KEY) {
-    console.warn('GEMINI_API_KEY is not set. Multimodal analysis will fail without it.');
+function getAiClient(): GoogleGenAI {
+    if (!ai) {
+        const API_KEY = process.env.API_KEY;
+        if (!API_KEY) {
+            throw new Error("API_KEY environment variable not set. Please ensure it's configured.");
+        }
+        ai = new GoogleGenAI({
+            apiKey: API_KEY,
+            httpOptions: {
+                //ç»§ç»­èµ°ä½ çš„ä»£ç†ï¼Œä¸æ”¹è¿™ä¸€è¡Œ
+                baseUrl: "https://yunwu.ai",
+            },
+        });
+    }
+    return ai;
 }
 
-// ÉÏ´«ÊÓÆµÎÄ¼şµ½ Gemini File API£¬·µ»Ø { uri, mimeType }
-async function uploadVideoToGemini(videoFile: File) {
-    if (!GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY is not configured');
+// æµè§ˆå™¨ç¯å¢ƒä¸‹æŠŠ File è½¬æˆ base64 å­—ç¬¦ä¸²
+async function fileToBase64(file: File): Promise<string> {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
     }
-
-    const formData = new FormData();
-    formData.append('file', videoFile);
-    // ¿ÉÑ¡£ºformData.append('fileId', videoFile.name);
-
-    const res = await fetch(
-        `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${GEMINI_API_KEY}`,
-        {
-            method: 'POST',
-            body: formData,
-        }
-    );
-
-    if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Failed to upload video: ${res.status} - ${text}`);
-    }
-
-    const data = await res.json();
-    // µäĞÍ·µ»Ø¸ñÊ½£º{ file: { uri, mimeType, ... } }
-    if (!data.file || !data.file.uri) {
-        throw new Error('Upload succeeded but no file URI returned from Gemini.');
-    }
-
-    return {
-        uri: data.file.uri as string,
-        mimeType: data.file.mimeType as string,
-    };
+    // window.btoa åœ¨æµè§ˆå™¨é‡Œå¯ç”¨
+    return btoa(binary);
 }
 
 /**
- * ¶àÄ£Ì¬·ÖÎö£º
- * - scriptText: ÎÄ±¾½Å±¾»òÃèÊö£¨¿ÉÒÔÎª¿Õ£©
- * - videoFile: ÉÏ´«µÄÊÓÆµÎÄ¼ş£¨¿ÉÒÔÎª¿Õ£©
+ * å¤šæ¨¡æ€è„šæœ¬åˆ†æï¼š
+ * - scriptText: æ–‡æœ¬è„šæœ¬/æè¿°ï¼Œå¯ä¸ºç©º
+ * - videoFile: ä¸Šä¼ çš„è§†é¢‘ Fileï¼Œå¯ä¸ºç©º
  *
- * ¶şÕßÖ»ÒªÓĞÒ»¸ö´æÔÚ¾Í¿ÉÒÔ¹¤×÷£»Èç¹û¶¼ÓĞ£¬Ôò×öÊÓÆµ + ÎÄ±¾ÁªºÏÀí½â¡£
+ * è‡³å°‘è¦æœ‰ä¸€ä¸ªå­˜åœ¨ï¼ˆåœ¨ App.tsx é‡Œå·²ç»åˆ¤æ–­è¿‡ï¼‰
  */
 export async function analyzeScriptAndGeneratePrompts(
     scriptText: string,
     videoFile?: File
 ): Promise<ScriptAnalysis> {
-    if (!GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY is not configured');
-    }
+    const aiClient = getAiClient();
+    const model = "gemini-2.5-flash";
+
+    // 1. æ„é€ æç¤ºè¯ï¼ˆä¸ç›´æ¥æŠŠè„šæœ¬æ’è¿›é•¿ promptï¼Œè€Œæ˜¯æ”¾åˆ°å•ç‹¬ text partï¼‰
+    const systemPrompt = `
+You are a professional film score composer.
+You will receive:
+- Optionally: a video (movie clip / short video).
+- Optionally: a script or description of the video.
+
+Your goal is to create a SINGLE, cohesive music generation prompt
+that acts as the soundtrack for the entire video.
+
+Output JSON with the following fields:
+1. summary: A brief 1-sentence summary of the video's content.
+2. mood: 2-3 words describing the emotional tone (e.g., "Melancholic, Hopeful").
+3. title: A creative title for the soundtrack.
+4. music_prompt: A detailed description for an AI music generator (Suno),
+   focusing on instruments, tempo, genre, and atmosphere.
+   - Do NOT include lyrics.
+   - Keep it under 450 characters.
+`.trim();
 
     const parts: any[] = [];
 
-    // 1. Èç¹ûÓĞÊÓÆµ£¬ÏÈÉÏ´«£¬ÔÙ°Ñ fileData ·ÅÈë parts
+    // 2. å¦‚æœæœ‰è§†é¢‘ï¼ŒæŠŠå®ƒä½œä¸º inlineData ä¼ è¿›å»ï¼ˆå¤šæ¨¡æ€ï¼‰
     if (videoFile) {
-        const uploaded = await uploadVideoToGemini(videoFile);
+        console.log('[Gemini] attaching video file to request', {
+            name: videoFile.name,
+            type: videoFile.type,
+            size: videoFile.size,
+        });
+
+        const base64 = await fileToBase64(videoFile);
+
         parts.push({
-            fileData: {
-                fileUri: uploaded.uri,
-                mimeType: uploaded.mimeType,
+            inlineData: {
+                data: base64,
+                mimeType: videoFile.type || "video/mp4",
             },
         });
     }
 
-    // 2. ÏµÍ³Ö¸Áî + ÎÄ±¾ÄÚÈİ
-    const systemPrompt = `
-You are a film and soundtrack expert. Analyze the given video (if present) together with the script/description.
-
-Return ONLY a strict JSON object with the following fields (no markdown, no extra text):
-{
-  "summary": "2-4 sentences summarizing the story and visuals.",
-  "music_prompt": "1-2 sentences describing the ideal background music.",
-  "mood": "short phrase describing overall mood, e.g. 'tense and mysterious'.",
-  "title": "short cinematic title for the soundtrack."
-}
-`.trim();
+    // 3. æŠŠç³»ç»Ÿæç¤ºå’Œè„šæœ¬æ–‡æœ¬ä½œä¸º text éƒ¨åˆ†
+    const scriptTextForModel =
+        scriptText && scriptText.trim().length > 0
+            ? scriptText
+            : "(No script text provided. Infer as much as possible from the video alone.)";
 
     parts.push(
         { text: systemPrompt },
         {
-            text:
-                scriptText && scriptText.trim().length > 0
-                    ? `SCRIPT_OR_DESCRIPTION:\n${scriptText}`
-                    : 'No script text provided. Infer as much as you can from the video alone.',
+            text: `SCRIPT_OR_DESCRIPTION:\n${scriptTextForModel}`,
         }
     );
 
-    // 3. µ÷ÓÃ Gemini ¶àÄ£Ì¬Ä£ĞÍ
-    const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [
-                    {
-                        role: 'user',
-                        parts,
-                    },
-                ],
-            }),
-        }
-    );
+    // 4. è°ƒç”¨ä»£ç†ç‰ˆ Gemini çš„ generateContent
+    const response = await aiClient.models.generateContent({
+        model,
+        contents: [
+            {
+                role: "user",
+                parts,
+            },
+        ],
+        config: {
+            // è®©ä»£ç†ç›´æ¥å¸®ä½ åš JSON ç»“æ„åŒ–è¾“å‡º
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    summary: { type: Type.STRING },
+                    mood: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    music_prompt: { type: Type.STRING },
+                },
+                required: ["summary", "mood", "title", "music_prompt"],
+            },
+        },
+    });
 
-    if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Gemini API error: ${res.status} - ${text}`);
+    const jsonText = (response.text || "").toString().trim();
+    console.log('[Gemini] raw jsonText:', jsonText);
+
+    if (!jsonText) {
+        throw new Error("Empty response from Gemini.");
     }
 
-    const data = await res.json();
-
-    const rawText =
-        data.candidates?.[0]?.content?.parts?.[0]?.text ??
-        data.candidates?.[0]?.content?.parts
-            ?.map((p: any) => p.text)
-            .filter(Boolean)
-            .join('\n');
-
-    if (!rawText) {
-        throw new Error('No text content returned from Gemini.');
-    }
-
-    // 4. ³¢ÊÔ´ÓÄ£ĞÍ·µ»ØÖĞ¿Ù³ö JSON ²¢½âÎö
     try {
-        const jsonStart = rawText.indexOf('{');
-        const jsonEnd = rawText.lastIndexOf('}');
-        const jsonString =
-            jsonStart >= 0 && jsonEnd >= 0
-                ? rawText.slice(jsonStart, jsonEnd + 1)
-                : rawText;
-
-        const parsed = JSON.parse(jsonString);
-
-        // ¼òµ¥µÄÀàĞÍ¶µµ×
+        const parsedResult = JSON.parse(jsonText);
         const result: ScriptAnalysis = {
-            summary: parsed.summary ?? '',
-            music_prompt: parsed.music_prompt ?? '',
-            mood: parsed.mood ?? '',
-            title: parsed.title ?? '',
+            summary: parsedResult.summary ?? "",
+            mood: parsedResult.mood ?? "",
+            title: parsedResult.title ?? "",
+            music_prompt: parsedResult.music_prompt ?? "",
         };
-
         return result;
     } catch (e) {
-        console.error('Failed to parse Gemini response as JSON:', rawText);
-        throw new Error('Failed to parse Gemini response as JSON. Check console output.');
+        console.error("Failed to parse JSON response:", jsonText, e);
+        throw new Error("The AI returned an invalid JSON format. Please try again or check the console log.");
     }
 }
