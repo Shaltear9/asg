@@ -33,7 +33,7 @@ const App: React.FC = () => {
             const blob: PutBlobResult = await upload(file.name, file, {
                 access: 'public',
                 handleUploadUrl: '/api/blob-upload', // 就是上面新建的那个 API
-                // 可选：限制 Content-Type，这里和后端 allowedContentTypes 保持一致
+                multipart: true, // 可选：限制 Content-Type，这里和后端 allowedContentTypes 保持一致
                 contentType: file.type || 'video/mp4',
             });
 

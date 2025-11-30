@@ -1,6 +1,6 @@
 // api/blob-upload.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { handleClientUpload } from '@vercel/blob'; // 来自 @vercel/blob 的 helper
+import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') {
@@ -9,18 +9,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        // 这里用 handleClientUpload 处理前端来的“小 JSON”，内部会和 Vercel Blob 交换 token。
-        const jsonResponse = await handleClientUpload({
-            request: req, // 在 Vercel Node 函数里是 IncomingMessage，库是支持的 
-            onBeforeGenerateToken: async (pathname) => {
-                // 这里可以做登录校验/授权；你现在是个人项目的话可以先不管，默认允许。
+        // Vercel Node runtime 通常已经帮你把 JSON 解析成 req.body
+        let body = req.body as HandleUploadBody | undefined;
+
+        // 如果是 string，就再手动 JSON.parse 一次
+        if (!body) {
+            const raw = req.body as any;
+            if (typeof raw === 'string') {
+                body = JSON.parse(raw) as HandleUploadBody;
+            }
+        }
+
+        if (!body) {
+            return res.status(400).json({ error: 'Missing upload body' });
+        }
+
+        const jsonResponse = await handleUpload({
+            request: req,   // 这里可以是 IncomingMessage（VercelRequest），官方支持
+            body,
+            onBeforeGenerateToken: async (pathname /*, clientPayload, multipart */) => {
+                // 这里可以做登录判断，现在先全部放行
                 return {
-                    // 限制视频类型，防止乱传
                     allowedContentTypes: ['video/mp4', 'video/webm', 'video/*'],
                     addRandomSuffix: true,
-                    // 最大 500MB，这个是 Blob 这边的上限，不是必须配这么大
-                    maximumSizeInBytes: 500 * 1024 * 1024,
+                    // 可以根据需要加 tokenPayload，上传完成后会回传给 onUploadCompleted
+                    tokenPayload: JSON.stringify({}),
                 };
+            },
+            onUploadCompleted: async ({ blob /*, tokenPayload */ }) => {
+                // 上传完成后 Vercel 会再回调一次这个 Route
+                console.log('[blob-upload] upload completed:', blob.url);
+                // 这里你暂时不用做别的事情
             },
         });
 
